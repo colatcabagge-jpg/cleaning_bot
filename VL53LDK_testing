@@ -1,0 +1,214 @@
+/*
+ * VL53L0X with AUTOMATIC CONNECTION RECOVERY
+ * Handles loose connections without stopping
+ * LED ON when distance < 6.5cm, OFF when > 6.5cm
+ */
+
+#include <Wire.h>
+#include <VL53L0X.h>
+
+VL53L0X sensor;
+
+#define LED_BUILTIN 2
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+// **DETECTION THRESHOLD: 6.5 CM = 65 MM**
+const int DETECTION_THRESHOLD_MM = 65;
+
+// State tracking
+bool sensorConnected = false;
+uint16_t lastValidDistance = 0;
+unsigned long lastValidReadTime = 0;
+int reconnectAttempts = 0;
+int totalErrors = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("\n╔════════════════════════════════════════╗");
+  Serial.println("║  VL53L0X AUTO-RECOVERY DISTANCE METER  ║");
+  Serial.println("║  LED ON: <6.5cm | LED OFF: >6.5cm     ║");
+  Serial.println("╚════════════════════════════════════════╝\n");
+  
+  Serial.print("Detection Threshold: ");
+  Serial.print(DETECTION_THRESHOLD_MM);
+  Serial.print(" mm (");
+  Serial.print(DETECTION_THRESHOLD_MM / 10.0, 1);
+  Serial.println(" cm)\n");
+  
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+  
+  // Try initial connection
+  connectSensor();
+}
+
+bool connectSensor() {
+  Serial.println("\n→ Attempting sensor connection...");
+  
+  // Reset I2C bus
+  Wire.end();
+  delay(100);
+  
+  // Enable pull-ups
+  pinMode(SDA_PIN, INPUT_PULLUP);
+  pinMode(SCL_PIN, INPUT_PULLUP);
+  delay(50);
+  
+  // Reinitialize I2C
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(100000); // Reliable 100kHz
+  delay(100);
+  
+  // Try to initialize sensor
+  sensor.setTimeout(3000);
+  
+  if (sensor.init()) {
+    Serial.println("✓ Sensor connected!");
+    
+    // Configure for reliability
+    sensor.setMeasurementTimingBudget(200000);
+    sensor.startContinuous(150);
+    
+    sensorConnected = true;
+    reconnectAttempts = 0;
+    
+    // Blink LED to show successful connection
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(100);
+    }
+    
+    Serial.println("✓ Ready to measure distances\n");
+    Serial.println("────────────────────────────────────────");
+    return true;
+  } else {
+    Serial.println("✗ Connection failed");
+    sensorConnected = false;
+    reconnectAttempts++;
+    return false;
+  }
+}
+
+void loop() {
+  // If sensor not connected, keep trying to reconnect
+  if (!sensorConnected) {
+    Serial.print("⟳ Reconnecting... (Attempt #");
+    Serial.print(reconnectAttempts);
+    Serial.println(")");
+    
+    if (connectSensor()) {
+      Serial.println("\n🎉 Sensor back online! Resuming measurements...\n");
+    } else {
+      // Show last known distance while disconnected
+      if (lastValidDistance > 0) {
+        Serial.print("⚠ Using last known: ");
+        Serial.print(lastValidDistance);
+        Serial.print(" mm (");
+        Serial.print(lastValidDistance / 10.0, 1);
+        Serial.print(" cm) - [");
+        Serial.print((millis() - lastValidReadTime) / 1000);
+        Serial.println(" sec ago]");
+      }
+      delay(1000); // Wait before retry
+      return;
+    }
+  }
+  
+  // Try to read distance
+  uint16_t distance = sensor.readRangeContinuousMillimeters();
+  
+  // Check for timeout (connection lost)
+  if (sensor.timeoutOccurred()) {
+    totalErrors++;
+    sensorConnected = false;
+    
+    Serial.println("\n⚠ CONNECTION LOST - Auto-reconnecting...");
+    
+    // Show last valid reading
+    if (lastValidDistance > 0) {
+      Serial.print("   Last valid reading: ");
+      Serial.print(lastValidDistance);
+      Serial.print(" mm (");
+      Serial.print(lastValidDistance / 10.0, 1);
+      Serial.println(" cm)");
+    }
+    
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(500);
+    return;
+  }
+  
+  // Check for out of range
+  if (distance >= 8190) {
+    Serial.print("Distance: OUT OF RANGE (>2000mm)");
+    
+    if (lastValidDistance > 0 && lastValidDistance < 2000) {
+      Serial.print(" [Last: ");
+      Serial.print(lastValidDistance);
+      Serial.print("mm]");
+    }
+    
+    Serial.println();
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(150);
+    return;
+  }
+  
+  // ✅ VALID READING!
+  lastValidDistance = distance;
+  lastValidReadTime = millis();
+  
+  // Display distance with nice formatting
+  Serial.print("Distance: ");
+  
+  // Pad for alignment
+  if (distance < 1000) Serial.print(" ");
+  if (distance < 100) Serial.print(" ");
+  if (distance < 10) Serial.print(" ");
+  
+  Serial.print(distance);
+  Serial.print(" mm  |  ");
+  
+  // Show in centimeters too
+  float cm = distance / 10.0;
+  if (cm < 100) Serial.print(" ");
+  if (cm < 10) Serial.print(" ");
+  Serial.print(cm, 1);
+  Serial.print(" cm");
+  
+  // Debug: Show threshold comparison
+  Serial.print("  [");
+  Serial.print(distance);
+  if (distance <= DETECTION_THRESHOLD_MM) {
+    Serial.print(" ≤ ");
+  } else {
+    Serial.print(" > ");
+  }
+  Serial.print(DETECTION_THRESHOLD_MM);
+  Serial.print("]");
+  
+  // Detection status (6.5cm = 65mm)
+  if (distance <= DETECTION_THRESHOLD_MM) {
+    Serial.print("  →  🔴 DETECTED!");
+    digitalWrite(LED_BUILTIN, HIGH);
+  } else {
+    Serial.print("  →  ⚪ Clear");
+    digitalWrite(LED_BUILTIN, LOW);
+  }
+  
+  // Show error count if any
+  if (totalErrors > 0) {
+    Serial.print("  [Errors: ");
+    Serial.print(totalErrors);
+    Serial.print("]");
+  }
+  
+  Serial.println();
+  
+  delay(100);
+}
