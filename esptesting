@@ -1,0 +1,206 @@
+/*
+ * VL53L0X NONSTOP READING + WEB DASHBOARD
+ * Serial + Web output
+ * DETECTED if distance <= 6.5cm (65mm)
+ */
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <VL53L0X.h>
+
+/* ---------- WiFi ---------- */
+const char* ssid = "Galaxy Tab A1FE0";
+const char* password = "1234arun";
+
+/* ---------- Pins ---------- */
+#define LED_BUILTIN 2
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+/* ---------- Threshold ---------- */
+const int DETECTION_THRESHOLD_MM = 65;
+
+/* ---------- Objects ---------- */
+WebServer server(80);
+VL53L0X sensor;
+
+/* ---------- State ---------- */
+bool sensorConnected = false;
+uint16_t distanceMM = 0;
+bool detected = false;
+
+/* ---------- Web Page ---------- */
+void handleRoot() {
+  String page = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<title>ESP32 Distance Dashboard</title>
+<style>
+body {
+  background:#0f172a;
+  color:#e5e7eb;
+  font-family: monospace;
+  padding:20px;
+}
+.header {
+  display:flex;
+  justify-content:space-between;
+}
+.box {
+  background:#020617;
+  border:1px solid #334155;
+  padding:10px;
+  border-radius:6px;
+  margin-bottom:10px;
+}
+.status { width:220px; }
+.console {
+  background:black;
+  color:#22c55e;
+  height:300px;
+  overflow-y:auto;
+  padding:10px;
+}
+.detected { color:#ef4444; }
+.clear { color:#22c55e; }
+</style>
+</head>
+
+<body>
+<div class="header">
+  <h2>ESP32 VL53L0X DASHBOARD</h2>
+  <div>
+    <div class="box status" id="wifi">WiFi: --</div>
+    <div class="box status" id="sensor">Sensor: --</div>
+  </div>
+</div>
+
+<div class="box console" id="terminal"></div>
+
+<script>
+function update() {
+  fetch('/data')
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('wifi').innerText =
+        "WiFi: " + d.wifi;
+      document.getElementById('sensor').innerText =
+        "Sensor: " + d.sensor;
+
+      let term = document.getElementById('terminal');
+      let time = new Date().toLocaleTimeString();
+      let cls = d.detected ? "detected" : "clear";
+      let text = d.detected ? "DETECTED" : "CLEAR";
+
+      term.innerHTML =
+        `<span class="${cls}">[${time}] ${d.distance} mm → ${text}</span><br>` +
+        term.innerHTML;
+    });
+}
+
+setInterval(update, 1000);
+</script>
+</body>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", page);
+}
+
+/* ---------- JSON Endpoint ---------- */
+void handleData() {
+  String json = "{";
+  json += "\"wifi\":\"" + String(WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED") + "\",";
+  json += "\"sensor\":\"" + String(sensorConnected ? "CONNECTED" : "DISCONNECTED") + "\",";
+  json += "\"distance\":" + String(distanceMM) + ",";
+  json += "\"detected\":" + String(detected ? "true" : "false");
+  json += "}";
+
+  server.send(200, "application/json", json);
+}
+
+/* ---------- Setup ---------- */
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  Serial.println("\nVL53L0X NONSTOP DISTANCE METER");
+  Serial.println("Threshold: 6.5 cm (65 mm)\n");
+
+  /* I2C */
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(100000);
+
+  /* WiFi */
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi connected");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+  /* Sensor */
+  sensor.setTimeout(500);
+  if (sensor.init()) {
+    sensorConnected = true;
+    sensor.startContinuous(100);
+    Serial.println("VL53L0X detected\n");
+  } else {
+    Serial.println("VL53L0X NOT detected");
+    sensorConnected = false;
+  }
+
+  /* Web */
+  server.on("/", handleRoot);
+  server.on("/data", handleData);
+  server.begin();
+}
+
+/* ---------- Loop ---------- */
+void loop() {
+  server.handleClient();
+
+  if (!sensorConnected) return;
+
+  uint16_t distance = sensor.readRangeContinuousMillimeters();
+
+  if (sensor.timeoutOccurred()) {
+    Serial.println("⚠ Sensor timeout");
+    digitalWrite(LED_BUILTIN, LOW);
+    return;
+  }
+
+  if (distance >= 8190) {
+    Serial.println("Distance: OUT OF RANGE");
+    digitalWrite(LED_BUILTIN, LOW);
+    return;
+  }
+
+  /* Update state */
+  distanceMM = distance;
+  detected = (distanceMM <= DETECTION_THRESHOLD_MM);
+
+  /* LED */
+  digitalWrite(LED_BUILTIN, detected ? HIGH : LOW);
+
+  /* SERIAL OUTPUT (NONSTOP, LIKE YOUR CODE) */
+  Serial.print("Distance: ");
+  Serial.print(distanceMM);
+  Serial.print(" mm | ");
+  Serial.print(distanceMM / 10.0, 1);
+  Serial.print(" cm → ");
+  Serial.println(detected ? "DETECTED" : "CLEAR");
+
+  delay(100);   // nonstop readable rate
+}
+
