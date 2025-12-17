@@ -1,0 +1,29 @@
+Copy these values into your main program.
+
+===============================
+ MPU6050 AUTO CALIBRATION
+ ESP32 + MPU6050
+===============================
+>>> DO NOT MOVE THE SENSOR <<<
+Calibrating in 5 seconds...
+MPU6050 connected.
+Starting calibration...
+
+=== CALIBRATION COMPLETE ===
+
+--- GYRO OFFSETS (raw) ---
+gyroOffsetX = -72.01
+gyroOffsetY = -155.01
+gyroOffsetZ = -233.57
+
+--- ACCEL OFFSETS (raw) ---
+accelOffsetX = 502.23
+accelOffsetY = -612.23
+accelOffsetZ = -562.79
+
+--- COPY INTO MAIN CODE ---
+Example:
+gx -= gyroOffsetX;
+ax -= accelOffsetX;
+
+Copy these values into your main program.
