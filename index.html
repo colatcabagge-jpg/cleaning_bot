@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cleaning Bot Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>🧹 Cleaning Bot Dashboard</h1>
+  <div class="status-bar">
+    <div id="pi-status" class="status offline">Pi: OFFLINE</div>
+    <div id="esp-status" class="status offline">ESP32: OFFLINE</div>
+  </div>
+</header>
+
+<main class="grid">
+
+  <!-- Joystick -->
+  <section class="card">
+    <h2>Joystick Control</h2>
+    <div class="joystick-box">
+      <div class="stick"></div>
+    </div>
+    <p class="hint">Joystick control (coming next)</p>
+  </section>
+
+  <!-- Camera -->
+  <section class="card">
+    <h2>Camera Feed</h2>
+    <div class="camera-box">
+      <p>Camera stream will appear here</p>
+    </div>
+  </section>
+
+  <!-- IMU -->
+  <section class="card">
+    <h2>IMU Status</h2>
+    <p>Accelerometer: <span id="accel">0, 0, 0</span></p>
+    <p>Gyroscope: <span id="gyro">0, 0, 0</span></p>
+    <p>Magnetometer: <span id="mag">0, 0, 0</span></p>
+  </section>
+
+  <!-- Sensors -->
+  <section class="card">
+    <h2>Sensor Status</h2>
+    <div class="sensor-grid">
+      <div class="sensor">Sensor 1</div>
+      <div class="sensor">Sensor 2</div>
+      <div class="sensor">Sensor 3</div>
+      <div class="sensor">Sensor 4</div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Socket.IO -->
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+  const socket = io({ transports: ["websocket"] });
+
+  socket.on("connect", () => {
+    console.log("WebSocket connected");
+  });
+
+  socket.on("pi_status", data => {
+    const pi = document.getElementById("pi-status");
+    pi.className = "status online";
+    pi.innerText = "Pi: ONLINE";
+  });
+
+  socket.on("esp32_status", data => {
+    const esp = document.getElementById("esp-status");
+    if (data.online) {
+      esp.className = "status online";
+      esp.innerText = "ESP32: ONLINE";
+    } else {
+      esp.className = "status offline";
+      esp.innerText = "ESP32: OFFLINE";
+    }
+  });
+</script>
+
+</body>
+</html>

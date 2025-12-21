@@ -1,0 +1,41 @@
+body {
+  background: #0f1117;
+  color: white;
+  font-family: Arial;
+  text-align: center;
+}
+
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  padding: 20px;
+}
+
+.sensor-card {
+  background: #1c2029;
+  padding: 20px;
+  border-radius: 10px;
+}
+
+.value {
+  font-size: 28px;
+  margin: 10px 0;
+}
+
+.bar {
+  background: #333;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.bar div {
+  height: 100%;
+  width: 0%;
+  transition: width 0.3s;
+}
+
+.safe { background: #2ecc71; }
+.warning { background: #f1c40f; }
+.danger { background: #e74c3c; }
