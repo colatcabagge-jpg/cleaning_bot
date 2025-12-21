@@ -1,0 +1,57 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// ===== WIFI =====
+const char* WIFI_SSID = "OPPOA54";
+const char* WIFI_PASSWORD = "98ae23zef523098";
+
+// ===== MQTT =====
+const char* MQTT_SERVER = "YOUR_PI_IP";   // e.g. 192.168.1.10
+const int   MQTT_PORT   = 1883;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+unsigned long lastPublish = 0;
+
+// ===== SETUP =====
+void setup() {
+  Serial.begin(115200);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  client.setServer(MQTT_SERVER, MQTT_PORT);
+  while (!client.connected()) {
+    client.connect("ESP32_SENSOR_NODE");
+  }
+
+  Serial.println("\nESP32 READY");
+}
+
+// ===== LOOP =====
+void loop() {
+  client.loop();
+
+  if (millis() - lastPublish > 500) {
+    lastPublish = millis();
+
+    // 🔴 Replace these with REAL sensor readings
+    int front = random(10, 200);
+    int left  = random(10, 200);
+    int right = random(10, 200);
+    int rear  = random(10, 200);
+
+    char payload[128];
+    snprintf(payload, sizeof(payload),
+      "{\"front\":%d,\"left\":%d,\"right\":%d,\"rear\":%d}",
+      front, left, right, rear
+    );
+
+    client.publish("esp32/sensors", payload);
+    Serial.println(payload);
+  }
+}
