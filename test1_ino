@@ -1,0 +1,111 @@
+#include "motor.h"
+#include "encoder.h"
+#include "vl53.h"
+
+char cmd;
+uint8_t speed = 120;
+
+unsigned long lastPrint = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("\n=== CLEANING BOT STARTUP ===");
+
+  motor_init();
+  encoder_init();
+  vl53_init();
+
+  Serial.println("Commands:");
+  Serial.println("F = Forward");
+  Serial.println("B = Backward");
+  Serial.println("L = Left");
+  Serial.println("R = Right");
+  Serial.println("S = Stop");
+  Serial.println("===========================\n");
+}
+
+void loop() {
+
+  /* ───────── SERIAL COMMAND CONTROL ───────── */
+  if (Serial.available()) {
+    cmd = Serial.read();
+
+    switch (cmd) {
+      case 'F':
+        motor_forward(speed);
+        break;
+
+      case 'B':
+        motor_backward(speed);
+        break;
+
+      case 'L':
+        motor_left(speed);
+        break;
+
+      case 'R':
+        motor_right(speed);
+        break;
+
+      case 'S':
+        motor_stop();
+        reset_logical_encoder();   // 🔑 reset encoder meaning when stopped
+        break;
+    }
+  }
+
+  /* ───────── UPDATE SENSORS ───────── */
+  encoder_update();   // encoder math layer
+  vl53_task();
+      // 4× ToF sensors
+
+  /* ───────── PERIODIC STATUS PRINT ───────── */
+  if (millis() - lastPrint > 300) {
+    lastPrint = millis();
+
+    Serial.println("────────────────────────────────");
+
+    // Encoder info
+    Serial.print("ENC | Dir L/R: ");
+    Serial.print(get_left_direction());
+    Serial.print(" / ");
+    Serial.print(get_right_direction());
+
+    Serial.print(" | Speed L/R: ");
+    Serial.print(get_left_speed());
+    Serial.print(" / ");
+    Serial.print(get_right_speed());
+
+    Serial.print(" | Dist L/R: ");
+    Serial.print(get_left_distance());
+    Serial.print(" / ");
+    Serial.println(get_right_distance());
+
+    // VL53 sensors
+    for (int i = 0; i < 4; i++) {
+      Serial.print("TOF ");
+      Serial.print(i);
+      Serial.print(": ");
+
+      uint16_t d = vl53_get_distance(i);
+
+      if (d == 0) {
+        Serial.print("NO DATA");
+      } else {
+        Serial.print(d);
+        Serial.print(" mm");
+
+        if (vl53_detected(i))
+          Serial.print("  🔴 DETECTED");
+        else
+          Serial.print("  ⚪ Clear");
+      }
+
+      Serial.println();
+    }
+
+    Serial.println("────────────────────────────────\n");
+  }
+}
