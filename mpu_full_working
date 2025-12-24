@@ -1,0 +1,179 @@
+#include <Wire.h>
+#include <MPU6050.h>
+
+MPU6050 mpu;
+
+// ================= I2C =================
+#define SDA_PIN 21
+#define SCL_PIN 22
+#define MPU_ADDR 0x68
+
+// ================= TIMING ==============
+#define READ_INTERVAL_MS 200
+#define RESET_COOLDOWN_MS 2000
+#define ALPHA 0.98
+
+// ================= CALIBRATION =========
+float gyroOffsetX  = -72.01;
+float gyroOffsetY  = -155.01;
+float gyroOffsetZ  = -233.57;
+
+float accelOffsetX = 502.23;
+float accelOffsetY = -612.23;
+float accelOffsetZ = -562.79;
+
+// ================= STATE =================
+unsigned long lastReadTime = 0;
+unsigned long lastResetTime = 0;
+unsigned long lastChangeTime = 0;
+
+float roll = 0, pitch = 0, yaw = 0;
+
+int16_t lastAx = 0, lastAy = 0, lastAz = 0;
+
+// ================= MPU PRESENCE CHECK =================
+bool isMPUAlive() {
+  Wire.beginTransmission(MPU_ADDR);
+  return (Wire.endTransmission() == 0);
+}
+
+// ================= INIT MPU =================
+bool initMPU() {
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(100000);
+  delay(50);
+
+  if (!isMPUAlive()) return false;
+
+  mpu.initialize();
+  delay(50);
+
+  mpu.setSleepEnabled(false);
+  mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
+  mpu.setFullScaleGyroRange(MPU6050_GYRO_FS_250);
+  mpu.setDLPFMode(MPU6050_DLPF_BW_42);
+
+  return mpu.testConnection();
+}
+
+// ================= RECOVERY =================
+void recoverMPU() {
+  if (millis() - lastResetTime < RESET_COOLDOWN_MS) return;
+
+  Wire.end();
+  delay(100);
+
+  initMPU();
+
+  lastResetTime = millis();
+}
+
+// ================= SETUP =================
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  initMPU();
+}
+
+// ================= LOOP =================
+void loop() {
+  if (millis() - lastReadTime < READ_INTERVAL_MS) return;
+  lastReadTime = millis();
+
+  // -------- HARD POWER CHECK --------
+  if (!isMPUAlive()) {
+    // MPU NOT POWERED → ABSOLUTELY NO OUTPUT
+    recoverMPU();
+    return;
+  }
+
+  int16_t ax, ay, az, gx, gy, gz, tempRaw;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  tempRaw = mpu.getTemperature();
+
+  // -------- ZERO READ REJECT --------
+  if (ax == 0 && ay == 0 && az == 0 &&
+      gx == 0 && gy == 0 && gz == 0) {
+    recoverMPU();
+    return;
+  }
+
+  // -------- STALE DATA REJECT --------
+  if (ax == lastAx && ay == lastAy && az == lastAz) {
+    if (millis() - lastChangeTime > 800) {
+      recoverMPU();
+      return;
+    }
+  } else {
+    lastChangeTime = millis();
+  }
+
+  lastAx = ax;
+  lastAy = ay;
+  lastAz = az;
+
+  // -------- TIME --------
+  static unsigned long lastTime = 0;
+  unsigned long now = millis();
+  float dt = (lastTime == 0) ? 0.02 : (now - lastTime) / 1000.0;
+  lastTime = now;
+
+  // -------- OFFSET + UNITS --------
+  float ax_g = (ax - accelOffsetX) / 16384.0;
+  float ay_g = (ay - accelOffsetY) / 16384.0;
+  float az_g = (az - accelOffsetZ) / 16384.0;
+
+  float gx_dps = (gx - gyroOffsetX) / 131.0;
+  float gy_dps = (gy - gyroOffsetY) / 131.0;
+  float gz_dps = (gz - gyroOffsetZ) / 131.0;
+
+  float temperatureC = (tempRaw / 340.0) + 36.53;
+
+  // -------- ACCEL ANGLES --------
+  float roll_acc  = atan2(ay_g, az_g) * 180.0 / PI;
+  float pitch_acc = atan2(-ax_g, sqrt(ay_g * ay_g + az_g * az_g)) * 180.0 / PI;
+
+  // -------- COMPLEMENTARY FILTER --------
+  roll  = ALPHA * (roll  + gx_dps * dt) + (1 - ALPHA) * roll_acc;
+  pitch = ALPHA * (pitch + gy_dps * dt) + (1 - ALPHA) * pitch_acc;
+
+  // -------- YAW --------
+  if (abs(gz_dps) < 0.5) gz_dps = 0;
+  yaw += gz_dps * dt;
+
+  if (yaw > 180) yaw -= 360;
+  if (yaw < -180) yaw += 360;
+
+  // -------- QUATERNION --------
+  float cr = cos(roll * PI / 360.0);
+  float sr = sin(roll * PI / 360.0);
+  float cp = cos(pitch * PI / 360.0);
+  float sp = sin(pitch * PI / 360.0);
+  float cy = cos(yaw * PI / 360.0);
+  float sy = sin(yaw * PI / 360.0);
+
+  float qw = cr * cp * cy + sr * sp * sy;
+  float qx = sr * cp * cy - cr * sp * sy;
+  float qy = cr * sp * cy + sr * cp * sy;
+  float qz = cr * cp * sy - sr * sp * cy;
+
+  // ================= OUTPUT =================
+  Serial.println("====================================");
+  Serial.print("Roll: "); Serial.print(roll, 2);
+  Serial.print("  Pitch: "); Serial.print(pitch, 2);
+  Serial.print("  Yaw: "); Serial.print(yaw, 2);
+  Serial.println(" deg");
+
+  Serial.print("Quaternion [x y z w]: ");
+  Serial.print(qx, 6); Serial.print(" ");
+  Serial.print(qy, 6); Serial.print(" ");
+  Serial.print(qz, 6); Serial.print(" ");
+  Serial.println(qw, 6);
+
+  Serial.print("Temperature: ");
+  Serial.print(temperatureC, 2);
+  Serial.println(" °C");
+}
