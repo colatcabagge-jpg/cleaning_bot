@@ -1,0 +1,230 @@
+#include <Wire.h>
+#include <VL53L0X.h>
+
+// ───────── MOTOR & ENCODER HEADERS (UNCHANGED) ─────────
+#include "motor.h"
+#include "encoder.h"
+
+// ───────── I2C ─────────
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+// ───────── VL53 CONFIG ─────────
+#define VL53_COUNT 4
+#define INVALID_RANGE 8190
+#define DETECTION_THRESHOLD_MM 50
+
+#define MAX_SAME_READINGS 15
+#define MAX_ZERO_READINGS 6
+#define RESET_COOLDOWN_MS 3000
+
+#define SENSOR_POLL_MS 50
+#define PRINT_INTERVAL_MS 300
+
+uint8_t xshutPins[VL53_COUNT] = {4, 16, 17, 5};
+uint8_t addresses[VL53_COUNT] = {0x30, 0x31, 0x32, 0x33};
+
+VL53L0X sensor[VL53_COUNT];
+
+// ───────── SENSOR STATE ─────────
+bool connected[VL53_COUNT];
+
+uint16_t lastDistance[VL53_COUNT];
+uint16_t lastValidDistance[VL53_COUNT];
+
+int sameReadingCount[VL53_COUNT];
+int zeroReadingCount[VL53_COUNT];
+
+unsigned long lastResetTime[VL53_COUNT];
+unsigned long lastPollTime[VL53_COUNT];
+unsigned long lastPrintTime = 0;
+
+int totalErrors[VL53_COUNT];
+
+// ───────── MOTOR CONTROL ─────────
+char cmd;
+uint8_t speed = 120;
+
+// ───────── HARD RESET ─────────
+void hardReset(uint8_t i) {
+  digitalWrite(xshutPins[i], LOW);
+  delay(80);
+  digitalWrite(xshutPins[i], HIGH);
+  delay(120);
+}
+
+// ───────── CONNECT ONE SENSOR ─────────
+bool connectSensor(uint8_t i) {
+  hardReset(i);
+
+  sensor[i].setTimeout(300);
+
+  if (!sensor[i].init()) {
+    connected[i] = false;
+    return false;
+  }
+
+  sensor[i].setAddress(addresses[i]);
+  sensor[i].setMeasurementTimingBudget(100000);
+  sensor[i].startContinuous(100);
+
+  sameReadingCount[i] = 0;
+  zeroReadingCount[i] = 0;
+  connected[i] = true;
+
+  Serial.print("✓ VL53 ");
+  Serial.print(i);
+  Serial.println(" ready");
+
+  return true;
+}
+
+// ───────── SETUP ─────────
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("\n=== CLEANING BOT : HARDENED BUILD ===");
+
+  // Motor + Encoder (unchanged)
+  motor_init();
+  encoder_init();
+
+  // I2C
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(100000);
+
+  // XSHUT setup
+  for (int i = 0; i < VL53_COUNT; i++) {
+    pinMode(xshutPins[i], OUTPUT);
+    digitalWrite(xshutPins[i], LOW);
+
+    connected[i] = false;
+    lastDistance[i] = 0;
+    lastValidDistance[i] = 0;
+    lastResetTime[i] = 0;
+    lastPollTime[i] = 0;
+    totalErrors[i] = 0;
+  }
+
+  delay(200);
+
+  // Bring sensors up one by one
+  for (int i = 0; i < VL53_COUNT; i++) {
+    digitalWrite(xshutPins[i], HIGH);
+    delay(100);
+    connectSensor(i);
+  }
+
+  Serial.println("F B L R S");
+}
+
+// ───────── LOOP ─────────
+void loop() {
+  unsigned long now = millis();
+
+  // ───── SERIAL MOTOR CONTROL ─────
+  if (Serial.available()) {
+    cmd = Serial.read();
+
+    switch (cmd) {
+      case 'F': motor_forward(speed); break;
+      case 'B': motor_backward(speed); break;
+      case 'L': motor_left(speed); break;
+      case 'R': motor_right(speed); break;
+      case 'S':
+        motor_stop();
+        reset_logical_encoder();
+        break;
+    }
+  }
+
+  // ───── ENCODER UPDATE ─────
+  encoder_update();
+
+  // ───── VL53 TASK (HARDENED) ─────
+  for (int i = 0; i < VL53_COUNT; i++) {
+
+    if (!connected[i]) {
+      if (now - lastResetTime[i] > RESET_COOLDOWN_MS) {
+        lastResetTime[i] = now;
+        connectSensor(i);
+      }
+      continue;
+    }
+
+    if (now - lastPollTime[i] < SENSOR_POLL_MS) continue;
+    lastPollTime[i] = now;
+
+    uint16_t d = sensor[i].readRangeContinuousMillimeters();
+
+    if (sensor[i].timeoutOccurred() || d >= INVALID_RANGE) {
+      connected[i] = false;
+      totalErrors[i]++;
+      lastResetTime[i] = now;
+      continue;
+    }
+
+    // ZERO FILTER
+    if (d == 0) zeroReadingCount[i]++;
+    else zeroReadingCount[i] = 0;
+
+    // FREEZE FILTER
+    if (d == lastDistance[i] && d != 0) sameReadingCount[i]++;
+    else sameReadingCount[i] = 0;
+
+    lastDistance[i] = d;
+
+    if (zeroReadingCount[i] >= MAX_ZERO_READINGS ||
+        sameReadingCount[i] >= MAX_SAME_READINGS) {
+      connected[i] = false;
+      totalErrors[i]++;
+      lastResetTime[i] = now;
+      sameReadingCount[i] = 0;
+      zeroReadingCount[i] = 0;
+      continue;
+    }
+
+    lastValidDistance[i] = d;
+  }
+
+  // ───── STATUS PRINT ─────
+  if (now - lastPrintTime >= PRINT_INTERVAL_MS) {
+    lastPrintTime = now;
+
+    Serial.println("────────────────────────");
+
+    // Encoder info
+    Serial.print("ENC | L/R Speed: ");
+    Serial.print(get_left_speed());
+    Serial.print(" / ");
+    Serial.println(get_right_speed());
+
+    // VL53 info
+    for (int i = 0; i < VL53_COUNT; i++) {
+      Serial.print("TOF ");
+      Serial.print(i);
+      Serial.print(": ");
+
+      if (!connected[i]) {
+        Serial.println("DISCONNECTED");
+      } else {
+        Serial.print(lastValidDistance[i]);
+        Serial.print(" mm");
+
+        if (lastValidDistance[i] <= DETECTION_THRESHOLD_MM)
+          Serial.print(" 🔴");
+        else
+          Serial.print(" ⚪");
+
+        Serial.print(" [f=");
+        Serial.print(sameReadingCount[i]);
+        Serial.print(" z=");
+        Serial.print(zeroReadingCount[i]);
+        Serial.print(" e=");
+        Serial.print(totalErrors[i]);
+        Serial.println("]");
+      }
+    }
+  }
+}
